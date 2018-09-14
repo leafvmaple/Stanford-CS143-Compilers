@@ -55,7 +55,7 @@ extern YYSTYPE cool_yylval;
   cool_yylval.symbol = idtable.add_string(str); \
   return OBJECTID;
 
-#define YY_SYMBOL_str(str) \
+#define YY_SYMBOL_STR(str) \
   cool_yylval.symbol = stringtable.add_string(str); \
   return STR_CONST;
 
@@ -249,12 +249,12 @@ not         return NOT;
     YY_ERROR("String constant too long");
   }
   yytext[text_len - 1] = '\0';
-  YY_SYMBOL_str(strcheck(yytext));
+  YY_SYMBOL_STR(strcheck(yytext));
 }
 
 <INITIAL>\'\\?.\' {
   yytext[strlen(yytext) - 1] = '\0';
-  YY_SYMBOL_str(strcheck(yytext));
+  YY_SYMBOL_STR(strcheck(yytext));
 }
 
 {WHITE_SPACE}
