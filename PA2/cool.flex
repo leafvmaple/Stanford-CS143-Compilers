@@ -37,11 +37,17 @@ char *string_buf_ptr;
 extern int curr_lineno;
 extern int verbose_flag;
 
+int comments_num = 0;
+
 extern YYSTYPE cool_yylval;
 
 /*
  *  Add Your own definitions here
  */
+
+#define YY_ERROR(msg) \
+  cool_yylval.error_msg = msg; \
+  return ERROR;
 
 #define YY_SYMBOL_INT(str) \
   cool_yylval.symbol = inttable.add_string(str); \
@@ -55,34 +61,32 @@ extern YYSTYPE cool_yylval;
   cool_yylval.symbol = idtable.add_string(str); \
   return OBJECTID;
 
-#define YY_SYMBOL_STR(str) \
-  if (str) {  \
-    cool_yylval.symbol = stringtable.add_string(str); \
+#define YY_SYMBOL_STR(err) \
+  if (!err) {  \
+    cool_yylval.symbol = stringtable.add_string(string_buf); \
     return STR_CONST; \
-  } else { \
-    cool_yylval.error_msg = "String contains null character"; \
-    return ERROR; \
+  } else if (err == 1) { \
+    YY_ERROR("String contains escaped null character.");  \
+  } else if (err == 2) { \
+    YY_ERROR("String constant too long");  \
   }
 
 #define YY_BOOL(bool) \
   cool_yylval.boolean = bool; \
   return BOOL_CONST;
 
-#define YY_ERROR(msg) \
-  cool_yylval.error_msg = msg; \
-  return ERROR;
-
 #define LINE_INC \
   ++curr_lineno;
 
-char* strcheck(char *str)
+int strcheck(char *str, int strlen)
 {
-  strcpy(string_buf, str);
   string_buf_ptr = string_buf;
-  for (int i = 0; string_buf[i]; i++) {
-    if (string_buf[i] == '\\' && string_buf[i + 1])
+  for (int i = 0; i < strlen - 1; i++) {
+    if (!str[i])
+      return 1;
+    if (str[i] == '\\' && str[i + 1])
     {
-      switch(string_buf[++i]) {
+      switch(str[++i]) {
         case 'b':
           *string_buf_ptr++ = '\b';
           break;
@@ -95,15 +99,18 @@ char* strcheck(char *str)
         case 'f':
           *string_buf_ptr++ = '\f';
           break;
-        case '0':
-          return 0;
+        default:
+          *string_buf_ptr++ = str[i];
       }
     } else {
-      *string_buf_ptr++ = string_buf[i];
+      *string_buf_ptr++ = str[i];
+    }
+    if (string_buf_ptr - string_buf >= MAX_STR_CONST) {
+      return 2;
     }
   }
   *string_buf_ptr = '\0';
-  return string_buf + 1;
+  return 0;
 }
 
 %}
@@ -134,13 +141,25 @@ OBJECT_ID       {LOWER_CASE}{ALPHA_NUM}*
   *  Nested comments
   */
 
-<INITIAL>\(\*   BEGIN(COMMENTS);
-<INITIAL>\-\-   BEGIN(INLINE_COMMENTS);
-<INITIAL>\*\)   { YY_ERROR("Unmatched *)"); }
+<INITIAL,COMMENTS>"(*"   { ++comments_num; BEGIN(COMMENTS); }
+<INITIAL>"--"              BEGIN(INLINE_COMMENTS);
+<INITIAL>"*)"            { YY_ERROR("Unmatched *)"); }
 
-<COMMENTS>[^(\*\)(\n)]+
-<COMMENTS>\*\)      BEGIN(INITIAL);
-<COMMENTS><<EOF>> { BEGIN(INITIAL); YY_ERROR("EOF in comment"); }
+<COMMENTS>[^\n()*]+
+
+<COMMENTS>"*)" {
+  --comments_num;
+  if (comments_num <= 0) {
+    BEGIN(INITIAL);
+  }
+}
+
+<COMMENTS>[*()]
+<COMMENTS><<EOF>> {
+  comments_num = 0;
+  BEGIN(INITIAL);
+  YY_ERROR("EOF in comment");
+}
 
 <INLINE_COMMENTS>[^\n]*
 <INLINE_COMMENTS>\n { LINE_INC; BEGIN(INITIAL); }
@@ -153,43 +172,76 @@ OBJECT_ID       {LOWER_CASE}{ALPHA_NUM}*
 
 {ASSIGN}    return ASSIGN;
 {LE}        return LE;
-{DARROW}		return DARROW;
+{DARROW}    return DARROW;
 
  /*
   * Keywords are case-insensitive except for the values true and false,
   * which must begin with a lower-case letter.
   */
 
-class       return CLASS;
-else        return ELSE;
-fi          return FI;
-if          return IF;
-in          return IN;
-inherits    return INHERITS;
-let         return LET;
-loop        return LOOP;
-pool        return POOL;
-then        return THEN;
-while       return WHILE;
-case        return CASE;
-esac        return ESAC;
-of          return OF;
-new         return NEW;
-isvoid      return ISVOID;
-not         return NOT;
+(?i:class)       return CLASS;
+(?i:else)        return ELSE;
+(?i:fi)          return FI;
+(?i:if)          return IF;
+(?i:in)          return IN;
+(?i:inherits)    return INHERITS;
+(?i:let)         return LET;
+(?i:loop)        return LOOP;
+(?i:pool)        return POOL;
+(?i:then)        return THEN;
+(?i:while)       return WHILE;
+(?i:case)        return CASE;
+(?i:esac)        return ESAC;
+(?i:of)          return OF;
+(?i:new)         return NEW;
+(?i:isvoid)      return ISVOID;
+(?i:not)         return NOT;
 
-<INITIAL>"true"   { YY_BOOL(true); }
-<INITIAL>"false"  { YY_BOOL(false); }
-{DIGIT}           { YY_SYMBOL_INT(yytext); }
-{TYPE_ID}         { YY_SYMBOL_TYPEID(yytext); }
-{OBJECT_ID}       { YY_SYMBOL_OBJECTID(yytext); }
+ /*
+  *  String constants (C syntax)
+  *  Escape sequence \c is accepted for all characters c. Except for 
+  *  \n \t \b \f, the result is c.
+  *
+  */
+
+<INITIAL>\"         BEGIN(STRING);
+
+<STRING>[^\n\"\\]+  yymore();
+<STRING>\\[^\n]     yymore();
+<STRING>\\\n      { LINE_INC; yymore(); }
+
+<STRING>\n {
+  LINE_INC;
+  BEGIN(INITIAL);
+  YY_ERROR("Unterminated string constant");
+}
+
+<STRING>\" {
+  BEGIN(INITIAL);
+  YY_SYMBOL_STR(strcheck(yytext, yyleng));
+}
+
+<STRING><<EOF>> {
+  BEGIN(INITIAL);
+  yyrestart(yyin);
+  YY_ERROR("EOF in string constant");
+}
+
+<INITIAL>\'\\?.\' {;
+  YY_SYMBOL_STR(strcheck(yytext, yyleng));
+}
+
+t(?i:rue)       { YY_BOOL(true); }
+f(?i:alse)      { YY_BOOL(false); }
+{DIGIT}*        { YY_SYMBOL_INT(yytext); }
+{TYPE_ID}       { YY_SYMBOL_TYPEID(yytext); }
+{OBJECT_ID}     { YY_SYMBOL_OBJECTID(yytext); }
 
 "+"     return int('+');
 "-"     return int('-');
 "*"     return int('*');
 "/"     return int('/');
 "<"     return int('<');
-">"     return int('>');
 "="     return int('=');
 "."     return int('.');
 ";"     return int(';');
@@ -201,35 +253,9 @@ not         return NOT;
 ":"     return int(':');
 "@"     return int('@');
 ","     return int(',');
-"["     return int('[');
-"]"     return int(']');
-
- /*
-  *  String constants (C syntax)
-  *  Escape sequence \c is accepted for all characters c. Except for 
-  *  \n \t \b \f, the result is c.
-  *
-  */
-
-<INITIAL>\"   BEGIN(STRING);
-
-<STRING>[^\n\t\b\f\"]+  yymore();
-<STRING>\n  { LINE_INC; YY_ERROR("Unterminated string constant"); }
-
-<STRING>\" {
-  BEGIN(INITIAL);
-  if (yyleng >= MAX_STR_CONST) {
-    YY_ERROR("String constant too long");
-  }
-  yytext[yyleng - 1] = '\0';
-  YY_SYMBOL_STR(strcheck(yytext));
-}
-
-<INITIAL>\'\\?.\' {
-  yytext[yyleng - 1] = '\0';
-  YY_SYMBOL_STR(strcheck(yytext));
-}
 
 {WHITE_SPACE}
+
+.       { YY_ERROR(yytext); }
 
 %%
