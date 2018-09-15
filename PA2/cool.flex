@@ -56,8 +56,13 @@ extern YYSTYPE cool_yylval;
   return OBJECTID;
 
 #define YY_SYMBOL_STR(str) \
-  cool_yylval.symbol = stringtable.add_string(str); \
-  return STR_CONST;
+  if (str) {  \
+    cool_yylval.symbol = stringtable.add_string(str); \
+    return STR_CONST; \
+  } else { \
+    cool_yylval.error_msg = "String contains null character"; \
+    return ERROR; \
+  }
 
 #define YY_BOOL(bool) \
   cool_yylval.boolean = bool; \
@@ -90,6 +95,8 @@ char* strcheck(char *str)
         case 'f':
           *string_buf_ptr++ = '\f';
           break;
+        case '0':
+          return 0;
       }
     } else {
       *string_buf_ptr++ = string_buf[i];
@@ -128,36 +135,21 @@ OBJECT_ID       {LOWER_CASE}{ALPHA_NUM}*
   */
 
 <INITIAL>\(\*   BEGIN(COMMENTS);
+<INITIAL>\-\-   BEGIN(INLINE_COMMENTS);
+<INITIAL>\*\)   { YY_ERROR("Unmatched *)"); }
 
 <COMMENTS>[^(\*\)(\n)]+
-
-<COMMENTS>\*\)  BEGIN(INITIAL);
-
-<COMMENTS><<EOF>> {
-  BEGIN(INITIAL);
-  YY_ERROR("EOF in comment");
-}
-
-<INITIAL>\*\) {
-  YY_ERROR("Unmatched *)");
-}
-
-<INITIAL>\-\-   BEGIN(INLINE_COMMENTS);
+<COMMENTS>\*\)      BEGIN(INITIAL);
+<COMMENTS><<EOF>> { BEGIN(INITIAL); YY_ERROR("EOF in comment"); }
 
 <INLINE_COMMENTS>[^\n]*
-
-<INLINE_COMMENTS>\n {
-  LINE_INC;
-  BEGIN(INITIAL);
-}
+<INLINE_COMMENTS>\n { LINE_INC; BEGIN(INITIAL); }
 
  /*
   *  The multiple-character operators.
   */
 
-<COMMENTS,INITIAL>\n {
-  LINE_INC;
-}
+<COMMENTS,INITIAL>\n  LINE_INC;
 
 {ASSIGN}    return ASSIGN;
 {LE}        return LE;
@@ -186,25 +178,11 @@ new         return NEW;
 isvoid      return ISVOID;
 not         return NOT;
 
-<INITIAL>"true" {
-  YY_BOOL(true);
-}
-
-<INITIAL>"false" {
-  YY_BOOL(false);
-}
-
-{DIGIT} {
-  YY_SYMBOL_INT(yytext);
-}
-
-{TYPE_ID} {
-  YY_SYMBOL_TYPEID(yytext);
-}
-
-{OBJECT_ID} {
-  YY_SYMBOL_OBJECTID(yytext);
-}
+<INITIAL>"true"   { YY_BOOL(true); }
+<INITIAL>"false"  { YY_BOOL(false); }
+{DIGIT}           { YY_SYMBOL_INT(yytext); }
+{TYPE_ID}         { YY_SYMBOL_TYPEID(yytext); }
+{OBJECT_ID}       { YY_SYMBOL_OBJECTID(yytext); }
 
 "+"     return int('+');
 "-"     return int('-');
@@ -236,24 +214,19 @@ not         return NOT;
 <INITIAL>\"   BEGIN(STRING);
 
 <STRING>[^\n\t\b\f\"]+  yymore();
-
-<STRING>\n {
-  LINE_INC;
-  YY_ERROR("Unterminated string constant");
-}
+<STRING>\n  { LINE_INC; YY_ERROR("Unterminated string constant"); }
 
 <STRING>\" {
   BEGIN(INITIAL);
-  int text_len = strlen(yytext);
-  if (text_len >= MAX_STR_CONST) {
+  if (yyleng >= MAX_STR_CONST) {
     YY_ERROR("String constant too long");
   }
-  yytext[text_len - 1] = '\0';
+  yytext[yyleng - 1] = '\0';
   YY_SYMBOL_STR(strcheck(yytext));
 }
 
 <INITIAL>\'\\?.\' {
-  yytext[strlen(yytext) - 1] = '\0';
+  yytext[yyleng - 1] = '\0';
   YY_SYMBOL_STR(strcheck(yytext));
 }
 
