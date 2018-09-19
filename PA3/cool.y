@@ -137,10 +137,11 @@
     %type <feature> feature
     %type <formals> formal_list
     %type <formal> formal;
-    %type <expressions> expressions
-    %type <expressions> block_exprs
+    %type <expressions> expression_list
+    %type <expressions> nonempty_expr_lst
+    %type <expressions> block_expr_lst
     %type <expression> expression
-    %type <expression> unempty_expr
+    %type <expression> nonempty_expr
     %type <expression> dispatch_expr
     %type <expression> let_expr
     %type <expression> while_expr
@@ -151,7 +152,15 @@
 
     
     /* Precedence declarations go here. */
-    
+    %left ASSIGN
+    %left NOT
+    %nonassoc LE '<' '='
+    %left '+' '-'
+    %left '*' '/'
+    %left ISVOID
+    %left '~'
+    %left '@'
+    %left '.'
     
     %%
     /* 
@@ -167,8 +176,6 @@
     | class_list class	/* several classes */
     { $$ = append_Classes($1,single_Classes($2)); 
     parse_results = $$; }
-    |
-    { $$ = nil_Classes(); }
     ;
     
     /* If no parent is specified, the class inherits from the Object class. */
@@ -177,7 +184,7 @@
     stringtable.add_string(curr_filename)); }
     | CLASS TYPEID INHERITS TYPEID '{' feature_list '}' ';'
     { $$ = class_($2,$4,$6,stringtable.add_string(curr_filename)); }
-    | CLASS error ';'
+    | error
     ;
     
     /* Feature list may be empty, but no empty features in list. */
@@ -191,11 +198,11 @@
 
     feature: OBJECTID ':' TYPEID ';'
     { $$ = attr($1,$3,no_expr()); }
-    | OBJECTID ':' TYPEID ASSIGN expression ';'
+    | OBJECTID ':' TYPEID ASSIGN nonempty_expr ';'
     { $$ = attr($1,$3,$5); }
-    | OBJECTID '(' formal_list ')' ':' TYPEID '{' expression '}' ';'
+    | OBJECTID '(' formal_list ')' ':' TYPEID '{' nonempty_expr '}' ';'
     { $$ = method($1,$3,$6,$8); }
-    | error
+    | error ';'
     ;
 
     formal_list: formal_list ',' formal
@@ -208,71 +215,76 @@
 
     formal: OBJECTID ':' TYPEID
     { $$ = formal($1,$3); }
+    | error
     ;
     
-    expressions: expressions ',' expression
+    nonempty_expr_lst: nonempty_expr_lst ',' nonempty_expr
     { $$ = append_Expressions($1,single_Expressions($3)); }
     | expression
     { $$ = single_Expressions($1); }
+    ;
+
+    expression_list: nonempty_expr_lst
+    { $$ = $1; }
     |
     { $$ = nil_Expressions(); }
     ;
 
-    block_exprs: block_exprs unempty_expr ';'
+    block_expr_lst: block_expr_lst nonempty_expr ';'
     { $$ = append_Expressions($1,single_Expressions($2)); }
-    |
-    { $$ = nil_Expressions(); }
+    | nonempty_expr ';'
+    { $$ = single_Expressions($1); }
     ;
 
-    unempty_expr: '(' expression ')'
+    nonempty_expr: '(' expression ')'
     { $$ = $2; }
 
-    | OBJECTID ASSIGN unempty_expr
+    | OBJECTID ASSIGN nonempty_expr
     { $$ = assign($1,$3); }
 
     | dispatch_expr
     { $$ = $1; }
 
-    | IF unempty_expr THEN expression ELSE expression FI
+    | IF nonempty_expr THEN nonempty_expr ELSE nonempty_expr FI
     { $$ = cond($2,$4,$6); }
 
     | WHILE while_expr
     { $$ = $2; }
 
-    | CASE unempty_expr OF case_list ESAC
+    | CASE nonempty_expr OF case_list ESAC
     { $$ = typcase($2,$4); }
 
-    | '{' block_exprs '}'
+    | '{' block_expr_lst '}'
     { $$ = block($2); }
 
     | LET let_expr
     { $$ = $2; }
 
-    | unempty_expr '+' unempty_expr
-    { printf("%s %s\n", $1,$3) ;$$ = plus($1,$3); }
+    | nonempty_expr '+' nonempty_expr
+    { $$ = plus($1,$3); }
 
-    | unempty_expr '-' unempty_expr
+    | nonempty_expr '-' nonempty_expr
     { $$ = sub($1,$3); }
 
-    | unempty_expr '*' unempty_expr
+    | nonempty_expr '*' nonempty_expr
     { $$ = mul($1,$3); }
 
-    | unempty_expr '/' unempty_expr
+    | nonempty_expr '/' nonempty_expr
     { $$ = divide($1,$3); }
 
-    | '~' unempty_expr
+    | '~' nonempty_expr
     { $$ = neg($2); }
 
-    | unempty_expr '<' unempty_expr
+    | nonempty_expr '<' nonempty_expr
     { $$ = lt($1,$3); }
 
-    | unempty_expr '=' unempty_expr
+    | nonempty_expr '=' nonempty_expr
     { $$ = eq($1,$3); }
 
-    | unempty_expr LE unempty_expr
+    | nonempty_expr LE nonempty_expr
     { $$ = leq($1,$3); }
 
-    | NOT unempty_expr
+    | NOT nonempty_expr
     { $$ = comp($2); }
 
     | INT_CONST
@@ -284,10 +296,10 @@
     | STR_CONST
     { $$ = string_const($1); }
 
-    | NEW OBJECTID
+    | NEW TYPEID
     { $$ = new_($2); }
 
-    | ISVOID expression
+    | ISVOID nonempty_expr
     { $$ = isvoid($2); }
 
     | OBJECTID
@@ -296,31 +308,31 @@
     | error
     ;
 
-    expression: unempty_expr
+    expression: nonempty_expr
     { $$ = $1; }
     |
     { $$ = no_expr(); }
 
-    dispatch_expr: expression '.' OBJECTID '(' expressions ')'
+    dispatch_expr: nonempty_expr '.' OBJECTID '(' expression_list ')'
     { $$ = dispatch($1,$3,$5); }
-    | OBJECTID '(' expressions ')'
-    { $$ = dispatch(no_expr(),$1,$3); }
-    | expression '@' TYPEID '.' OBJECTID '(' expressions ')'
+    | OBJECTID '(' expression_list ')'
+    { $$ = dispatch(object(idtable.add_string("self")),$1,$3); }
+    | nonempty_expr '@' TYPEID '.' OBJECTID '(' expression_list ')'
     { $$ = static_dispatch($1,$3,$5,$7); }
 
-    let_expr: OBJECTID ':' TYPEID ASSIGN expression ',' let_expr
+    let_expr: OBJECTID ':' TYPEID ASSIGN nonempty_expr ',' let_expr
     { $$ = let($1,$3,$5,$7); }
     | OBJECTID ':' TYPEID ',' let_expr
     { $$ = let($1,$3,no_expr(),$5); }
-    | OBJECTID ':' TYPEID ASSIGN expression IN expression
+    | OBJECTID ':' TYPEID ASSIGN nonempty_expr IN nonempty_expr
     { $$ = let($1,$3,$5,$7); }
-    | OBJECTID ':' TYPEID IN expression
+    | OBJECTID ':' TYPEID IN nonempty_expr
     { $$ = let($1,$3,no_expr(),$5); }
     ;
 
-    while_expr: expression LOOP expression POOL
+    while_expr: nonempty_expr LOOP expression POOL
     { $$ = loop($1,$3); }
-    | expression LOOP error
+    | nonempty_expr LOOP error
 
     case_list: case_list case_
     { $$ = append_Cases($1,single_Cases($2)); }
@@ -330,7 +342,7 @@
     { $$ = nil_Cases(); }
     ;
 
-    case_: OBJECTID ':' TYPEID DARROW expression
+    case_: OBJECTID ':' TYPEID DARROW expression ';'
     { $$ = branch($1,$3,$5); }
     ;
     
